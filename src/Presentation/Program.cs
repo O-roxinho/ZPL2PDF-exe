@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -10,30 +12,68 @@ using Microsoft.AspNetCore.Cors.Infrastructure;
 using ZPL2PDF.Shared.Localization;
 using ZPL2PDF.Shared.Constants;
 using ZPL2PDF.Presentation.Api.Models;
+using ZPL2PDF.Presentation.Gui;
 using ZPL2PDF.Application.Services;
 
 namespace ZPL2PDF
 {
     /// <summary>
-    /// Main program for converting ZPL to PDF.
-    /// 
-    /// The program requires the following parameters:
-    /// 1. Input file path: Specified with the -i parameter.
-    /// 2. Output folder path: Specified with the -o parameter.
-    /// 
-    /// The output file name can be specified using the -n parameter.
-    /// If not specified, the PDF file name will be "ZPL2PDF_DDMMYYYYHHMM.pdf".
-    /// Alternatively, the ZPL content can be provided directly using the -z parameter.
-    /// 
-    /// Optional parameters:
-    /// -w: Width of the label.
-    /// -h: Height of the label.
-    /// -d: Print density in dots per millimeter.
-    /// -u: Unit of measurement for width and height ("in", "cm", "mm").
+    /// Main program for converting ZPL to PDF (GUI & CLI modes).
     /// </summary>
     class Program
     {
-        static async Task Main(string[] args)
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool AttachConsole(int dwProcessId);
+
+        private const int ATTACH_PARENT_PROCESS = -1;
+
+        [STAThread]
+        static void Main(string[] args)
+        {
+            if (ShouldStartGui(args, out var initialPaths))
+            {
+                System.Windows.Forms.Application.SetHighDpiMode(System.Windows.Forms.HighDpiMode.SystemAware);
+                System.Windows.Forms.Application.EnableVisualStyles();
+                System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
+                System.Windows.Forms.Application.Run(new MainForm(initialPaths));
+                return;
+            }
+
+            if (OperatingSystem.IsWindows())
+            {
+                AttachConsole(ATTACH_PARENT_PROCESS);
+            }
+
+            RunCliOrApiAsync(args).GetAwaiter().GetResult();
+        }
+
+        private static bool ShouldStartGui(string[] args, out List<string> initialPaths)
+        {
+            initialPaths = new List<string>();
+
+            if (args == null || args.Length == 0)
+            {
+                return true;
+            }
+
+            if (args[0].Equals("--gui", StringComparison.OrdinalIgnoreCase) ||
+                args[0].Equals("--ui", StringComparison.OrdinalIgnoreCase))
+            {
+                initialPaths.AddRange(args.Skip(1).Where(p => File.Exists(p) || Directory.Exists(p)));
+                return true;
+            }
+
+            // If user dragged and dropped files/folders/ZIPs directly onto ZPL2PDF.exe in Explorer
+            if (args.All(a => !a.StartsWith("-") && (File.Exists(a) || Directory.Exists(a))))
+            {
+                initialPaths.AddRange(args);
+                return true;
+            }
+
+            return false;
+        }
+
+        static async Task RunCliOrApiAsync(string[] args)
         {
             try
             {
